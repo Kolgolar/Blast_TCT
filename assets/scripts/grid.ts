@@ -13,20 +13,35 @@ export default class Grid extends cc.Component {
     @property({ type: cc.Prefab })
     token: cc.Prefab = null;
 
+    @property( {type: cc.Prefab })
+    explosionPrefab: cc.Prefab = null; // перетащите в редакторе
+
+    @property( {type: cc.Node })
+    tokensLayer: cc.Node = null;
+
+    @property( {type: cc.Node })
+    particlesLayer: cc.Node = null;
+
     @property({ type: cc.Integer })
     framePadding: number = 10;
 
     @property({ type: cc.Integer })
     cellPadding: number = 5;
 
-    @property({ type: cc.Float, tooltip: "Задержка перед началом падения новых токенов (сек)" })
+    @property({ type: cc.Float, tooltip: "Задержка перед началом падения новых токенов" })
     newTokensDelay: number = 0.1;
 
-    @property({ type: cc.Float, tooltip: "Длительность падения на одну клетку (сек)" })
+    @property({ type: cc.Float, tooltip: "Длительность падения на одну клетку"})
     fallDurationPerCell: number = 0.08;
 
-    @property({ type: cc.Float, tooltip: "Задержка между стартом падения соседних новых токенов в столбце (сек)" })
+    @property({ type: cc.Float, tooltip: "Задержка между стартом падения соседних новых токенов в столбце" })
     newTokensStaggerDelay: number = 0.03;
+    
+    @property({ type: cc.Float, tooltip: "Сила пружинного эффекта при приземлении в долях от ячейки" })
+    landingBounceFactor: number = 0.05;
+
+    @property({ type: cc.Float, tooltip: "Длительность одной фазы пружинного эффекта" })
+    bounceDuration: number = 0.05;
 
     private tokens: Token[][] = [];
     private cellSize = cc.Vec2.ZERO;
@@ -48,6 +63,12 @@ export default class Grid extends cc.Component {
     }
 
     protected start(): void {
+        this.startNewGame();
+    }
+
+
+    public startNewGame() {
+        this.clearAllTokens();
         this.generateGrid();
         this.recomputeAllClusters();
     }
@@ -60,12 +81,8 @@ export default class Grid extends cc.Component {
 
 
     private checkGameOver() {
-        // В blast игра заканчивается, когда нет ни одного кластера и нет возможных ходов
-        // (в классическом blast возможных ходов нет – только взрывы существующих).
-        // Поэтому если clusters пуст – игра окончена.
         if (!this.hasAnyCluster()) {
             console.log("Game Over!");
-            // Здесь можно показать UI окончания игры
         }
     }
 
@@ -75,6 +92,26 @@ export default class Grid extends cc.Component {
     //---------------------------
     // Генерация поля
     //---------------------------
+
+
+    private clearAllTokens(): void {
+        if (!this.tokens) {
+            return;
+        }
+        for (let col = 0; col < this.gridSize.x; col++) {
+            if (!this.tokens[col]) continue;
+            
+            for (let row = 0; row < this.gridSize.y; row++) {
+                const token = this.tokens[col][row];
+                if (token && token.node && token.node.isValid) {
+                    token.node.destroy();
+                }
+                this.tokens[col][row] = null;
+            }
+        }
+        
+        this.tokens = [];
+    }
 
 
     private generateGrid() {
@@ -106,7 +143,7 @@ export default class Grid extends cc.Component {
                 tokenComponent.type = DEFAULT_TOKENS[randomIndex];
 
                 this.tokens[col][row] = tokenComponent;
-                newToken.setParent(this.node);
+                newToken.setParent(this.tokensLayer);
                 newToken.setPosition(this.getTokenPosition(col, row));
                 const sprite = newToken.getComponent(cc.Sprite);
                 sprite.sizeMode = cc.Sprite.SizeMode.CUSTOM;
@@ -137,33 +174,57 @@ export default class Grid extends cc.Component {
 
     private async applyGravityAndRefillAsync(): Promise<void> {
         const animations: Promise<void>[] = [];
+        const bounceOffsetY = -this.cellSize.y * this.landingBounceFactor;
 
-        // Падение существующих токенов (без изменений)
+        // 1. Падение существующих токенов
         for (let col = 0; col < this.gridSize.x; col++) {
-            const existingTokens: Token[] = [];
+            // Собираем токены с их исходными рядами (снизу вверх)
+            const items: { token: Token; originalRow: number }[] = [];
             for (let row = 0; row < this.gridSize.y; row++) {
                 const token = this.tokens[col][row];
-                if (token) existingTokens.push(token);
+                if (token) items.push({ token, originalRow: row });
             }
+            // Очищаем столбец
             for (let row = 0; row < this.gridSize.y; row++) {
                 this.tokens[col][row] = null;
             }
 
-            for (let newRow = 0; newRow < existingTokens.length; newRow++) {
-                const token = existingTokens[newRow];
-                const oldPos = token.node.getPosition();
+            // Расставляем токены снизу вверх (newRow = 0 — низ)
+            for (let newRow = 0; newRow < items.length; newRow++) {
+                const { token, originalRow } = items[newRow];
                 const newPos = this.getTokenPosition(col, newRow);
-                const distanceInCells = Math.abs(oldPos.y - newPos.y) / this.cellSize.y;
-                const fallDuration = distanceInCells * this.fallDurationPerCell;
-                const oldRow = this.getRowFromPosition(oldPos);
-                const delay = Math.max(0, oldRow - newRow) * 0.02;
-
                 this.tokens[col][newRow] = token;
 
+                // Если токен не менял строку — не анимируем
+                if (originalRow === newRow) {
+                    token.node.setPosition(newPos); // синхронизация позиции
+                    continue;
+                }
+
+                // Анимация падения + пружина
+                const distanceInCells = Math.abs(originalRow - newRow);
+                const fallDuration = distanceInCells * this.fallDurationPerCell;
+                const delay = Math.max(0, originalRow - newRow) * 0.02;
+
                 const movePromise = new Promise<void>((resolve) => {
-                    cc.tween(token.node)
+                    // Сначала падение
+                    let fallTween = cc.tween(token.node)
                         .delay(delay)
-                        .to(fallDuration, { position: newPos })
+                        .to(fallDuration, { position: newPos });
+
+                    // Добавляем пружинный эффект ПОСЛЕ падения
+                    if (this.landingBounceFactor > 0 && bounceOffsetY !== 0) {
+                        fallTween = fallTween
+                            .call(() => {
+                                // Пружина стартует только после завершения падения
+                                cc.tween(token.node)
+                                    .to(this.bounceDuration, { position: cc.v2(newPos.x, newPos.y + bounceOffsetY) })
+                                    .to(this.bounceDuration, { position: newPos })
+                                    .start();
+                            });
+                    }
+
+                    fallTween
                         .call(() => resolve())
                         .start();
                 });
@@ -171,7 +232,7 @@ export default class Grid extends cc.Component {
             }
         }
 
-        // Новые токены
+        // 2. Новые токены (всегда падают)
         for (let col = 0; col < this.gridSize.x; col++) {
             const emptyRows: number[] = [];
             for (let row = 0; row < this.gridSize.y; row++) {
@@ -182,23 +243,20 @@ export default class Grid extends cc.Component {
             const topRowPos = this.getTokenPosition(col, this.gridSize.y - 1);
             const newTokens: Token[] = [];
 
-            // Создаём новые токены колонной над полем
             for (let idx = 0; idx < emptyRows.length; idx++) {
                 const targetRow = emptyRows[idx];
                 const targetPos = this.getTokenPosition(col, targetRow);
                 const newToken = cc.instantiate(this.token);
                 const tokenComp = newToken.getComponent(Token);
-                const randomIndex = this.getRandomTokenType();
-                tokenComp.type = DEFAULT_TOKENS[randomIndex];
+                tokenComp.type = DEFAULT_TOKENS[this.getRandomTokenType()];
 
                 const sprite = newToken.getComponent(cc.Sprite);
                 sprite.sizeMode = cc.Sprite.SizeMode.CUSTOM;
                 sprite.node.setContentSize(this.tokenSize.x, this.tokenSize.y);
 
-                // Стартовая позиция: над верхней строкой + смещение по idx
                 const startY = topRowPos.y + this.cellSize.y + idx * this.cellSize.y;
                 newToken.setPosition(targetPos.x, startY, 0);
-                newToken.parent = this.node;
+                newToken.setParent(this.tokensLayer);
 
                 newTokens.push(tokenComp);
             }
@@ -208,13 +266,24 @@ export default class Grid extends cc.Component {
                 const targetPos = this.getTokenPosition(col, targetRow);
                 const distanceInCells = (token.node.getPosition().y - targetPos.y) / this.cellSize.y;
                 const fallDuration = distanceInCells * this.fallDurationPerCell;
-
                 const totalDelay = this.newTokensDelay + idx * this.newTokensStaggerDelay;
 
                 return new Promise<void>((resolve) => {
-                    cc.tween(token.node)
+                    let tweenSeq = cc.tween(token.node)
                         .delay(totalDelay)
-                        .to(fallDuration, { position: targetPos }, { easing: 'sineOut' })
+                        .to(fallDuration, { position: targetPos });
+
+                    if (this.landingBounceFactor > 0 && bounceOffsetY !== 0) {
+                        tweenSeq = tweenSeq
+                            .call(() => {
+                                cc.tween(token.node)
+                                    .to(this.bounceDuration, { position: cc.v2(targetPos.x, targetPos.y + bounceOffsetY) })
+                                    .to(this.bounceDuration, { position: targetPos })
+                                    .start();
+                            });
+                    }
+
+                    tweenSeq
                         .call(() => {
                             this.tokens[col][targetRow] = token;
                             resolve();
@@ -227,6 +296,8 @@ export default class Grid extends cc.Component {
 
         await Promise.all(animations);
         this.isAnimating = false;
+        this.recomputeAllClusters();
+        this.checkGameOver();
     }
 
     // Вспомогательный метод: количество существующих токенов в столбце
@@ -314,15 +385,42 @@ export default class Grid extends cc.Component {
         const idx = this.clusterId[col][row];
         if (idx === -1) return false;
 
+        const destroyedTokens: { [key: number]: number } = {};
+
         const cluster = this.clusters[idx];
         for (const pos of cluster) {
             const token = this.tokens[pos.x][pos.y];
             if (token && token.node) {
+                const worldPos = token.node.getPosition();
+                this.playExplosionAt(worldPos);
+                destroyedTokens[token.type] = (destroyedTokens[token.type] || 0) + 1;
+                
                 token.node.destroy();
             }
             this.tokens[pos.x][pos.y] = null;
         }
+        const event = new cc.Event.EventCustom("tokens-destroyed", true);
+        event.setUserData({
+            tokens: destroyedTokens
+        });
+        this.node.dispatchEvent(event);
+
         return true;
+    }
+
+
+    playExplosionAt(worldPos: cc.Vec2) {
+        if (!this.explosionPrefab) return;
+        const explosion = cc.instantiate(this.explosionPrefab);
+        explosion.setPosition(worldPos);
+        explosion.parent = this.particlesLayer;
+        const particle = explosion.getComponent(cc.ParticleSystem);
+        if (particle) {
+            const duration = particle.duration * 3.0;
+            this.scheduleOnce(() => explosion.destroy(), duration);
+        } else {
+            explosion.destroy();
+        }
     }
 
 
@@ -340,8 +438,9 @@ export default class Grid extends cc.Component {
 
     onTouchEnd(event: cc.Event.EventTouch) {
         if (this.isAnimating) return;
+
         const swipeDir = this.checkSwipe(this.eventStartPos, event.getLocation());
-        if (swipeDir.len() !== 0) return; // для blast свайп можно игнорировать
+        if (swipeDir.len() !== 0) return;
 
         const tokenPos = this.posToGrid(event.getLocation());
         if (!tokenPos) return;
@@ -349,11 +448,13 @@ export default class Grid extends cc.Component {
         const success = this.explodeClusterAt(tokenPos.x, tokenPos.y);
         if (!success) return;
 
+        const moveEvent = new cc.Event.EventCustom("move-made", true);
+        this.node.dispatchEvent(moveEvent);
+
         this.isAnimating = true;
 
+
         this.applyGravityAndRefillAsync();
-        this.recomputeAllClusters();
-        this.checkGameOver();
     }
 
 

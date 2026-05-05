@@ -1,9 +1,4 @@
-// Learn TypeScript:
-//  - https://docs.cocos.com/creator/2.4/manual/en/scripting/typescript.html
-// Learn Attribute:
-//  - https://docs.cocos.com/creator/2.4/manual/en/scripting/reference/attributes.html
-// Learn life-cycle callbacks:
-//  - https://docs.cocos.com/creator/2.4/manual/en/scripting/life-cycle-callbacks.html
+import Grid from './grid';
 
 const {ccclass, property} = cc._decorator;
 
@@ -16,25 +11,92 @@ export default class NewClass extends cc.Component {
     @property(cc.Label)
     movesLabel: cc.Label = null;
 
-    score: number = 0;
+    @property(cc.Integer)
+    maxMoves: number = 30;
 
+    @property(cc.Integer)
+    scoreTarget: number = 500;
+
+    @property(cc.Node)
+    grid: cc.Node = null;
+
+    score: number = 0;
+    movesLeft: number = 0;
     // @property
     // text: string = 'hello';
 
     // LIFE-CYCLE CALLBACKS:
 
-    // onLoad () {}
+    onLoad () {
+        cc.systemEvent.on(cc.SystemEvent.EventType.KEY_DOWN, this.onKeyDown, this);
+        this.grid.on("tokens-destroyed", this.onTokensDestroyed, this);
+        this.grid.on("move-made", this.onMoveMade, this);
+        this.grid.on("game-over", this.onGameOver, this);
+    }
+
+    protected onDestroy(): void {
+        cc.systemEvent.off(cc.SystemEvent.EventType.KEY_DOWN, this.onKeyDown, this);
+    }
 
     start () {
-
+        this.restartGame();
     }
 
     update (dt) {
         // this.addScore(1);
     }
 
-    addScore(score: number) {
-        this.score += score;
-        this.scoreLabel.string = this.score.toString();
+    onMoveMade(event: cc.Event.EventCustom) {
+        this.setMoves(this.movesLeft - 1);
+        
+        if (this.movesLeft <= 0) {
+            this.gameOver();
+        }
+    }
+
+
+    onTokensDestroyed(event: cc.Event.EventCustom) {
+        const data = event.getUserData();
+        const tokens = data.tokens;
+        let pointsAdd = 0;
+        for (const [type, count] of Object.entries(tokens)) {
+            console.log(count);
+            pointsAdd += 10 * (count as number);
+        }
+        this.setScore(this.score + pointsAdd);
+    }
+    
+
+    onGameOver(event: cc.Event.EventCustom) {
+        this.gameOver();
+    }
+
+
+    public setScore(points: number) {
+        this.score = points
+        this.scoreLabel.string = `${this.score}/${this.scoreTarget}`;
+    }
+
+    public setMoves(moves: number) {
+        this.movesLeft = moves;
+        this.movesLabel.string = `${this.movesLeft}`;
+    }
+
+    public gameOver() {
+        console.log("Game Over!");
+    }
+
+
+    restartGame() {
+        this.setMoves(this.maxMoves)
+        this.setScore(0);
+        let gridScript = this.grid.getComponent(Grid);
+        gridScript.startNewGame();
+    }
+
+    onKeyDown(event: cc.Event.EventKeyboard) {
+        if (event.keyCode === cc.macro.KEY.r) {
+            this.restartGame();    
+        }
     }
 }
