@@ -618,6 +618,8 @@
     "maxShuffleAttempts": 3,
     "shuffleAnimDuration": 1,
     "bonusSpawnThreshold": 4,
+    "bonusLineDestroyDelay": 0.05,
+    "tokensSwapTime": 0.25,
     "_id": "81xoyVLsBKLpn3p06H3irW"
   },
   {

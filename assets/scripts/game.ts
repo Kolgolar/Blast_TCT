@@ -42,21 +42,9 @@ export default class Game extends cc.Component {
         this.grid.on("no-clusters", this.onNoClusters, this);
     }
 
-    // protected onDestroy(): void {
-    //     cc.systemEvent.off(cc.SystemEvent.EventType.KEY_DOWN, this.onKeyDown, this);
-    // }
-
     start () {
         this.restartGame();
     }
-
-    // onMoveMade(event: cc.Event.EventCustom) {
-    //     this.setMoves(this.movesLeft - 1);
-    //     if (this.score >= this.scoreTarget)
-    //         this.gameEnd(GameResult.SCORE_REACHED);
-    //     else if (this.movesLeft <= 0)
-    //         this.gameEnd(GameResult.NO_MOVES);
-    // }
 
 
     onTokensDestroyed(event: cc.Event.EventCustom) {
