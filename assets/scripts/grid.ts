@@ -1,8 +1,5 @@
 const { ccclass, property } = cc._decorator;
 import Token, { TokenType, DEFAULT_TOKENS } from './token';
-import Utility from './utility';
-
-const MIN_CLUSTER_SIZE = 3;
 
 @ccclass
 export default class Grid extends cc.Component {
@@ -14,7 +11,7 @@ export default class Grid extends cc.Component {
     token: cc.Prefab = null;
 
     @property( {type: cc.Prefab })
-    explosionPrefab: cc.Prefab = null; // перетащите в редакторе
+    explosionPrefab: cc.Prefab = null;
 
     @property( {type: cc.Node })
     tokensLayer: cc.Node = null;
@@ -43,6 +40,23 @@ export default class Grid extends cc.Component {
     @property({ type: cc.Float, tooltip: "Длительность одной фазы пружинного эффекта" })
     bounceDuration: number = 0.05;
 
+    @property( {type: cc.Integer })
+    private maxShuffleAttempts: number = 3;
+
+    @property({ type: cc.Float, tooltip: "Длительность анимации исчезновения/появления при перемешивании" })
+    shuffleAnimDuration: number = 0.2;
+    
+    @property( {type: cc.Integer})
+    bonusSpawnThreshold: number = 4;
+
+    private readonly SHAKE_PERIOD = 0.5
+    private readonly SHAKE_ANGLE = 12; // градусы
+
+    private readonly MIN_CLUSTER_SIZE = 3;
+    private readonly TOKEN_BASE_SIZE = 75;
+
+    private bonusLineDestroyDelay = 0.05;
+
     private tokens: Token[][] = [];
     private cellSize = cc.Vec2.ZERO;
     private tokenSize = cc.Vec2.ZERO;
@@ -51,11 +65,22 @@ export default class Grid extends cc.Component {
     private clusters: cc.Vec2[][] = [];
     private clusterId: number[][] = [];
 
+    private isShuffling = false;
     private isAnimating = false
+    private gridLocked = false;
 
-    // Вспомогательные переменные для расчёта позиций
+    // private highlightedTokens: Map<Token, { scale: cc.Vec3, color: cc.Color }> = new Map
+    private highlightedTokens: Map<Token, { originalRotation: number, shakeTween: cc.Tween }> = new Map();
+    private boosterSelectCallback: ((pos: cc.Vec2) => void) | null = null;
+    private boosterCancelCallback: (() => void) | null = null;
+
     private startX: number = 0;
     private startY: number = 0;
+
+    private pendingBonuses: { col: number, row: number, type: TokenType }[] = [];
+    private isProcessingQueue: boolean = false;
+
+    private shuffleAttempts: number = 0;
 
     protected onLoad(): void {
         this.node.on(cc.Node.EventType.TOUCH_START, this.onTouchStart, this);
@@ -68,9 +93,22 @@ export default class Grid extends cc.Component {
 
 
     public startNewGame() {
+        this.isAnimating = false;
+        this.gridLocked = false;
+        this.isShuffling = false;
+        this.shuffleAttempts = 0;
+        this.pendingBonuses = [];
+        this.isProcessingQueue = false;
+        this.clearHighlight();
         this.clearAllTokens();
         this.generateGrid();
         this.recomputeAllClusters();
+        this.checkAnyCluster(false);
+        this.resetShuffleAttempts();
+    }
+
+    public setLocked(lock: boolean) {
+        this.gridLocked = lock;
     }
 
 
@@ -80,10 +118,321 @@ export default class Grid extends cc.Component {
     }
 
 
-    private checkGameOver() {
-        if (!this.hasAnyCluster()) {
-            console.log("Game Over!");
+    private checkAnyCluster(shouldShuffle: boolean = true) {
+        if (this.clusters.length == 0) {
+            if (shouldShuffle) {
+                if (this.shuffleAttempts < this.maxShuffleAttempts) {
+                    this.handleNoClusters();
+                } else {
+                    const event = new cc.Event.EventCustom("no-clusters", true);
+                    this.node.dispatchEvent(event);
+                }
+            }
         }
+    }
+
+
+
+
+    //---------------------------
+    // Бонусы
+    //---------------------------
+
+
+
+    private hasAnyBonusOnField(): boolean {
+        for (let col = 0; col < this.gridSize.x; col++) {
+            for (let row = 0; row < this.gridSize.y; row++) {
+                const token = this.tokens[col][row];
+                if (token && token.isBonus()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+
+    private spawnBonusToken(col: number, row: number): void {
+        // 50% шанс на строку или столбец
+        const isRow = Math.random() < 0.5;
+        const bonusType = isRow ? TokenType.BONUS_ROW : TokenType.BONUS_COLUMN;
+        
+        const newToken = cc.instantiate(this.token);
+        const tokenComp = newToken.getComponent(Token);
+        tokenComp.type = bonusType;
+        
+        const sprite = newToken.getComponent(cc.Sprite);
+        sprite.sizeMode = cc.Sprite.SizeMode.CUSTOM;
+        sprite.node.setContentSize(this.tokenSize.x, this.tokenSize.y);
+        
+        if (bonusType === TokenType.BONUS_COLUMN) {
+            newToken.setRotation(90);
+        }
+        
+        newToken.setPosition(this.getTokenPosition(col, row));
+        newToken.parent = this.tokensLayer;
+        
+        this.tokens[col][row] = tokenComp;
+    }
+
+
+
+    private handleNoClusters() {
+        if (this.isAnimating || this.gridLocked || this.isShuffling) return;
+
+        if (this.hasAnyBonusOnField()) {
+            return;
+        }
+
+        this.shuffleAttempts++;
+
+        if (this.shuffleAttempts > this.maxShuffleAttempts) {
+            const gameOverEvent = new cc.Event.EventCustom("game-over", true);
+            this.node.dispatchEvent(gameOverEvent);
+            return;
+        }
+
+        this.shuffleBoardAnimated(() => {
+            this.recomputeAllClusters();
+            if (this.clusters.length > 0) {
+                this.shuffleAttempts = 0;
+            } else {
+                this.handleNoClusters();
+            }
+        });
+    }
+
+
+
+
+    //---------------------------
+    // Бустеры
+    //---------------------------
+
+
+    public setBoosterMode(selectCallback: (pos: cc.Vec2) => void, cancelCallback?: () => void) {
+        this.boosterSelectCallback = selectCallback;
+        this.boosterCancelCallback = cancelCallback || null;
+    }
+
+    public clearBoosterMode() {
+        this.boosterSelectCallback = null;
+        this.boosterCancelCallback = null;
+        this.clearHighlight();
+    }
+
+
+    public highlightToken(pos: cc.Vec2, effect: string = 'selected') {
+        const token = this.tokens[pos.x][pos.y];
+        if (!token || !token.node) return;
+
+        if (!this.highlightedTokens.has(token)) {
+            // Сохраняем исходное вращение
+            this.highlightedTokens.set(token, {
+                originalRotation: token.node.rotation,
+                shakeTween: null
+            });
+        }
+
+        const data = this.highlightedTokens.get(token);
+        if (data.shakeTween) {
+            data.shakeTween.stop();
+        }
+
+        const tween = cc.tween(token.node)
+            .repeatForever(
+                cc.tween()
+                    .to(this.SHAKE_PERIOD, { rotation: this.SHAKE_ANGLE }, { easing: 'sineInOut' })
+                    .to(this.SHAKE_PERIOD, { rotation: -this.SHAKE_ANGLE }, { easing: 'sineInOut' })
+            )
+            .start();
+        data.shakeTween = tween;
+    }
+
+
+    public clearHighlight(pos?: cc.Vec2) {
+        if (pos) {
+            const token = this.tokens[pos.x][pos.y];
+            if (token && this.highlightedTokens.has(token)) {
+                const data = this.highlightedTokens.get(token);
+                if (data.shakeTween) {
+                    data.shakeTween.stop();
+                }
+                token.node.rotation = data.originalRotation;
+                this.highlightedTokens.delete(token);
+            }
+        } else {
+            this.highlightedTokens.forEach((data, token) => {
+                if (token && token.node && token.node.isValid) {
+                    if (data.shakeTween) data.shakeTween.stop();
+                    token.node.rotation = data.originalRotation;
+                }
+            });
+            this.highlightedTokens.clear();
+        }
+    }
+
+
+    public swapTokens(pos1: cc.Vec2, pos2: cc.Vec2, onComplete?: () => void) {
+        if (this.isAnimating || this.gridLocked) {
+            if (onComplete) onComplete();
+            return;
+        }
+        const token1 = this.tokens[pos1.x][pos1.y];
+        const token2 = this.tokens[pos2.x][pos2.y];
+        if (!token1 || !token2) {
+            if (onComplete) onComplete();
+            return;
+        }
+
+        this.isAnimating = true;
+        const pos1World = token1.node.getPosition();
+        const pos2World = token2.node.getPosition();
+
+        cc.tween(token1.node)
+            .to(0.15, { position: pos2World })
+            .start();
+        cc.tween(token2.node)
+            .to(0.15, { position: pos1World })
+            .call(() => {
+                // Обновляем массив токенов
+                this.tokens[pos1.x][pos1.y] = token2;
+                this.tokens[pos2.x][pos2.y] = token1;
+
+                // Обновляем координаты в компонентах (если методы есть)
+                if (token1.setRowCol) token1.setRowCol(pos2.y, pos2.x);
+                if (token2.setRowCol) token2.setRowCol(pos1.y, pos1.x);
+
+                // Синхронизируем финальные позиции
+                token1.node.setPosition(pos2World);
+                token2.node.setPosition(pos1World);
+
+                // Пересчитываем кластеры (обновляем clusterId)
+                this.recomputeAllClusters();
+
+                this.isAnimating = false;
+                if (onComplete) onComplete();
+            })
+            .start();
+    }
+
+    public async explodeArea(centerCol: number, centerRow: number, radius: number, onComplete?: () => void, explosionDelay: number = 0) {
+        if (this.isAnimating || this.gridLocked) {
+            if (onComplete) onComplete();
+            return;
+        }
+        this.isAnimating = true;
+
+        const positionsToDestroy: cc.Vec2[] = [];
+        for (let dx = -radius; dx <= radius; dx++) {
+            for (let dy = -radius; dy <= radius; dy++) {
+                const col = centerCol + dx;
+                const row = centerRow + dy;
+                if (col >= 0 && col < this.gridSize.x && row >= 0 && row < this.gridSize.y) {
+                    const token = this.tokens[col][row];
+                    if (token) {
+                        if (token.isBonus()) {
+                            this.pendingBonuses.push({ col, row, type: token.type });
+                            this.playExplosionAt(token.node.getPosition());
+                            token.node.destroy();
+                            this.tokens[col][row] = null;
+                        } else {
+                            positionsToDestroy.push(cc.v2(col, row));
+                        }
+                        if (explosionDelay > 0) {
+                            await new Promise(resolve => setTimeout(resolve, explosionDelay * 1000));
+                        }
+                    }
+                }
+            }
+        }
+
+        this.destroyTokensAtPositions(positionsToDestroy, true);
+        await this.processBonusQueue();
+        await this.applyGravityAndRefillAsync();
+        this.isAnimating = false;
+        if (onComplete) onComplete();
+    }
+
+
+    public async shuffleBoardAnimated(onComplete?: () => void) {
+        if (this.isAnimating || this.gridLocked || this.isShuffling) {
+            if (onComplete) onComplete();
+            return;
+        }
+        this.isShuffling = true;
+        this.isAnimating = true;
+
+        // Собираем все токены
+        const allTokens: Token[] = [];
+        for (let col = 0; col < this.gridSize.x; col++) {
+            for (let row = 0; row < this.gridSize.y; row++) {
+                const token = this.tokens[col][row];
+                if (token) allTokens.push(token);
+            }
+        }
+        if (allTokens.length === 0) {
+            this.isShuffling = false;
+            this.isAnimating = false;
+            if (onComplete) onComplete();
+            return;
+        }
+
+        // Создаём список всех целевых позиций (перемешанный)
+        const allPositions: cc.Vec2[] = [];
+        for (let col = 0; col < this.gridSize.x; col++) {
+            for (let row = 0; row < this.gridSize.y; row++) {
+                allPositions.push(cc.v2(col, row));
+            }
+        }
+        // Перемешиваем массив позиций
+        for (let i = allPositions.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [allPositions[i], allPositions[j]] = [allPositions[j], allPositions[i]];
+        }
+
+        // Назначаем каждому токену целевую позицию и анимируем перемещение
+        const animations: Promise<void>[] = [];
+        for (let i = 0; i < allTokens.length; i++) {
+            const token = allTokens[i];
+            const targetPos = allPositions[i];
+            const targetWorldPos = this.getTokenPosition(targetPos.x, targetPos.y);
+            const promise = new Promise<void>((resolve) => {
+                cc.tween(token.node)
+                    .to(0.2, { position: targetWorldPos })
+                    .call(() => resolve())
+                    .start();
+            });
+            animations.push(promise);
+        }
+        await Promise.all(animations);
+
+        // Обновляем массив tokens
+        // Сначала очищаем весь массив
+        for (let col = 0; col < this.gridSize.x; col++) {
+            for (let row = 0; row < this.gridSize.y; row++) {
+                this.tokens[col][row] = null;
+            }
+        }
+        // Расставляем токены по новым позициям
+        for (let i = 0; i < allTokens.length; i++) {
+            const token = allTokens[i];
+            const targetPos = allPositions[i];
+            this.tokens[targetPos.x][targetPos.y] = token;
+            // Обновляем внутренние координаты токена, если они хранятся
+            if (token.setRowCol) token.setRowCol(targetPos.y, targetPos.x);
+        }
+
+        this.recomputeAllClusters();
+        this.isShuffling = false;
+        this.isAnimating = false;
+        if (onComplete) onComplete();
+    }
+
+
+    public resetShuffleAttempts() {
+        this.shuffleAttempts = 0;
     }
 
 
@@ -176,105 +525,109 @@ export default class Grid extends cc.Component {
         const animations: Promise<void>[] = [];
         const bounceOffsetY = -this.cellSize.y * this.landingBounceFactor;
 
-        // 1. Падение существующих токенов
+        // Проходим по всем столбцам
         for (let col = 0; col < this.gridSize.x; col++) {
-            // Собираем токены с их исходными рядами (снизу вверх)
+            // 1. Собираем все обычные токены (не бонусы) в столбце с их исходными рядами
             const items: { token: Token; originalRow: number }[] = [];
             for (let row = 0; row < this.gridSize.y; row++) {
                 const token = this.tokens[col][row];
-                if (token) items.push({ token, originalRow: row });
+                if (token && !token.isBonus()) {
+                    items.push({ token, originalRow: row });
+                }
             }
-            // Очищаем столбец
+            // 2. Помечаем, какие ряды заняты бонусами (чтобы не ставить туда обычные токены)
+            const bonusRows: boolean[] = Array(this.gridSize.y).fill(false);
             for (let row = 0; row < this.gridSize.y; row++) {
-                this.tokens[col][row] = null;
+                const token = this.tokens[col][row];
+                if (token && token.isBonus()) bonusRows[row] = true;
             }
 
-            // Расставляем токены снизу вверх (newRow = 0 — низ)
-            for (let newRow = 0; newRow < items.length; newRow++) {
-                const { token, originalRow } = items[newRow];
+            // 3. Очищаем весь столбец (но бонусы мы потом восстановим)
+            //    Временно удаляем обычные токены из массива, бонусы оставляем
+            for (let row = 0; row < this.gridSize.y; row++) {
+                const token = this.tokens[col][row];
+                if (token && !token.isBonus()) {
+                    this.tokens[col][row] = null;
+                }
+            }
+
+            // 4. Расставляем обычные токены снизу вверх, пропуская ряды с бонусами
+            let newRow = 0;
+            for (let idx = 0; idx < items.length; idx++) {
+                // Пропускаем ряды, занятые бонусами
+                while (newRow < this.gridSize.y && bonusRows[newRow]) newRow++;
+                if (newRow >= this.gridSize.y) break; // нет свободного места
+
+                const { token, originalRow } = items[idx];
                 const newPos = this.getTokenPosition(col, newRow);
                 this.tokens[col][newRow] = token;
 
-                // Если токен не менял строку — не анимируем
-                if (originalRow === newRow) {
-                    token.node.setPosition(newPos); // синхронизация позиции
-                    continue;
+                if (originalRow !== newRow) {
+                    // Анимация падения + пружина
+                    const distance = Math.abs(originalRow - newRow);
+                    const fallDuration = distance * this.fallDurationPerCell;
+                    const delay = Math.max(0, originalRow - newRow) * 0.02;
+                    const promise = new Promise<void>((resolve) => {
+                        let tween = cc.tween(token.node)
+                            .delay(delay)
+                            .to(fallDuration, { position: newPos });
+                        if (this.landingBounceFactor > 0 && bounceOffsetY !== 0) {
+                            tween = tween
+                                .call(() => {
+                                    cc.tween(token.node)
+                                        .to(this.bounceDuration, { position: cc.v2(newPos.x, newPos.y + bounceOffsetY) })
+                                        .to(this.bounceDuration, { position: newPos })
+                                        .start();
+                                });
+                        }
+                        tween.call(() => resolve()).start();
+                    });
+                    animations.push(promise);
+                } else {
+                    // синхронизация позиции
+                    token.node.setPosition(newPos);
                 }
-
-                // Анимация падения + пружина
-                const distanceInCells = Math.abs(originalRow - newRow);
-                const fallDuration = distanceInCells * this.fallDurationPerCell;
-                const delay = Math.max(0, originalRow - newRow) * 0.02;
-
-                const movePromise = new Promise<void>((resolve) => {
-                    // Сначала падение
-                    let fallTween = cc.tween(token.node)
-                        .delay(delay)
-                        .to(fallDuration, { position: newPos });
-
-                    // Добавляем пружинный эффект ПОСЛЕ падения
-                    if (this.landingBounceFactor > 0 && bounceOffsetY !== 0) {
-                        fallTween = fallTween
-                            .call(() => {
-                                // Пружина стартует только после завершения падения
-                                cc.tween(token.node)
-                                    .to(this.bounceDuration, { position: cc.v2(newPos.x, newPos.y + bounceOffsetY) })
-                                    .to(this.bounceDuration, { position: newPos })
-                                    .start();
-                            });
-                    }
-
-                    fallTween
-                        .call(() => resolve())
-                        .start();
-                });
-                animations.push(movePromise);
+                newRow++;
             }
-        }
 
-        // 2. Новые токены (всегда падают)
-        for (let col = 0; col < this.gridSize.x; col++) {
+            // 5. Теперь создаём новые токены для заполнения верхних пустот
+            //    Находим все пустые ряды, которые не заняты бонусами и не были заполнены обычными токенами
             const emptyRows: number[] = [];
             for (let row = 0; row < this.gridSize.y; row++) {
-                if (this.tokens[col][row] === null) emptyRows.push(row);
+                if (this.tokens[col][row] === null && !bonusRows[row]) {
+                    emptyRows.push(row);
+                }
             }
-            if (emptyRows.length === 0) continue;
-
+            // Новые токены будут падать сверху
             const topRowPos = this.getTokenPosition(col, this.gridSize.y - 1);
             const newTokens: Token[] = [];
-
             for (let idx = 0; idx < emptyRows.length; idx++) {
                 const targetRow = emptyRows[idx];
                 const targetPos = this.getTokenPosition(col, targetRow);
                 const newToken = cc.instantiate(this.token);
                 const tokenComp = newToken.getComponent(Token);
                 tokenComp.type = DEFAULT_TOKENS[this.getRandomTokenType()];
-
                 const sprite = newToken.getComponent(cc.Sprite);
                 sprite.sizeMode = cc.Sprite.SizeMode.CUSTOM;
                 sprite.node.setContentSize(this.tokenSize.x, this.tokenSize.y);
-
                 const startY = topRowPos.y + this.cellSize.y + idx * this.cellSize.y;
-                newToken.setPosition(targetPos.x, startY, 0);
-                newToken.setParent(this.tokensLayer);
-
+                newToken.setPosition(targetPos.x, startY);
+                newToken.parent = this.tokensLayer;
                 newTokens.push(tokenComp);
             }
-
+            // Анимации для новых токенов
             const fallPromises = newTokens.map((token, idx) => {
                 const targetRow = emptyRows[idx];
                 const targetPos = this.getTokenPosition(col, targetRow);
-                const distanceInCells = (token.node.getPosition().y - targetPos.y) / this.cellSize.y;
-                const fallDuration = distanceInCells * this.fallDurationPerCell;
+                const distance = (token.node.getPosition().y - targetPos.y) / this.cellSize.y;
+                const fallDuration = distance * this.fallDurationPerCell;
                 const totalDelay = this.newTokensDelay + idx * this.newTokensStaggerDelay;
-
                 return new Promise<void>((resolve) => {
-                    let tweenSeq = cc.tween(token.node)
+                    let tween = cc.tween(token.node)
                         .delay(totalDelay)
                         .to(fallDuration, { position: targetPos });
-
                     if (this.landingBounceFactor > 0 && bounceOffsetY !== 0) {
-                        tweenSeq = tweenSeq
+                        tween = tween
                             .call(() => {
                                 cc.tween(token.node)
                                     .to(this.bounceDuration, { position: cc.v2(targetPos.x, targetPos.y + bounceOffsetY) })
@@ -282,13 +635,10 @@ export default class Grid extends cc.Component {
                                     .start();
                             });
                     }
-
-                    tweenSeq
-                        .call(() => {
-                            this.tokens[col][targetRow] = token;
-                            resolve();
-                        })
-                        .start();
+                    tween.call(() => {
+                        this.tokens[col][targetRow] = token;
+                        resolve();
+                    }).start();
                 });
             });
             animations.push(...fallPromises);
@@ -297,26 +647,8 @@ export default class Grid extends cc.Component {
         await Promise.all(animations);
         this.isAnimating = false;
         this.recomputeAllClusters();
-        this.checkGameOver();
+        this.checkAnyCluster();
     }
-
-    // Вспомогательный метод: количество существующих токенов в столбце
-    private getExistingTokensCountInColumn(col: number): number {
-        let count = 0;
-        for (let row = 0; row < this.gridSize.y; row++) {
-            if (this.tokens[col][row] !== null) count++;
-        }
-        return count;
-    }
-
-    // Вспомогательный метод: получить ряд по позиции (примерно, можно округлить)
-    private getRowFromPosition(worldPos: cc.Vec2): number {
-        const localPos = this.node.convertToNodeSpaceAR(worldPos);
-        const startY = -this.node.height / 2 + this.framePadding;
-        let row = Math.floor((localPos.y - startY) / this.cellSize.y);
-        return Math.min(Math.max(0, row), this.gridSize.y - 1);
-    }
-
 
 
 
@@ -357,14 +689,14 @@ export default class Grid extends cc.Component {
                         const nx = nb.x, ny = nb.y;
                         if (nx >= 0 && nx < this.gridSize.x && ny >= 0 && ny < this.gridSize.y) {
                             const nbToken = this.tokens[nx][ny];
-                            if (nbToken && !visited[nx][ny] && nbToken.type === type) {
+                            if (nbToken && !visited[nx][ny] && nbToken.type === type && !nbToken.isBonus()) {
                                 queue.push(nb);
                             }
                         }
                     }
                 }
 
-                if (cluster.length >= MIN_CLUSTER_SIZE) {
+                if (cluster.length >= this.MIN_CLUSTER_SIZE) {
                     this.clusters.push(cluster);
                     for (const pos of cluster) {
                         this.clusterId[pos.x][pos.y] = nextClusterIndex;
@@ -376,36 +708,16 @@ export default class Grid extends cc.Component {
     }
 
 
-    hasAnyCluster(): boolean {
-        return this.clusters.length > 0;
-    }
-
-
-    explodeClusterAt(col: number, row: number): boolean {
+    public explodeClusterAt(col: number, row: number): number | null {
         const idx = this.clusterId[col][row];
-        if (idx === -1) return false;
-
-        const destroyedTokens: { [key: number]: number } = {};
+        if (idx === -1) return null;
 
         const cluster = this.clusters[idx];
-        for (const pos of cluster) {
-            const token = this.tokens[pos.x][pos.y];
-            if (token && token.node) {
-                const worldPos = token.node.getPosition();
-                this.playExplosionAt(worldPos);
-                destroyedTokens[token.type] = (destroyedTokens[token.type] || 0) + 1;
-                
-                token.node.destroy();
-            }
-            this.tokens[pos.x][pos.y] = null;
-        }
-        const event = new cc.Event.EventCustom("tokens-destroyed", true);
-        event.setUserData({
-            tokens: destroyedTokens
-        });
-        this.node.dispatchEvent(event);
+        if (!cluster || cluster.length === 0) return null;
 
-        return true;
+        // Используем универсальный метод
+        this.destroyTokensAtPositions(cluster, true);
+        return cluster.length;
     }
 
 
@@ -413,16 +725,202 @@ export default class Grid extends cc.Component {
         if (!this.explosionPrefab) return;
         const explosion = cc.instantiate(this.explosionPrefab);
         explosion.setPosition(worldPos);
-        explosion.parent = this.particlesLayer;
+
+        const scale = this.tokenSize.x / this.TOKEN_BASE_SIZE;
         const particle = explosion.getComponent(cc.ParticleSystem);
         if (particle) {
+            particle.startSize *= scale;
+            particle.endSize *= scale;
+            if (particle.posVar) particle.posVar = particle.posVar.mul(scale);
+            particle.resetSystem();
             const duration = particle.duration * 3.0;
             this.scheduleOnce(() => explosion.destroy(), duration);
         } else {
             explosion.destroy();
         }
+        explosion.parent = this.particlesLayer;
     }
 
+
+    private async activateBonusToken(col: number, row: number) {
+        const token = this.tokens[col][row];
+        if (!token || !token.isBonus()) return;
+        const bonusType = token.type;
+        const isRow = bonusType === TokenType.BONUS_ROW;
+
+        this.playExplosionAt(token.node.getPosition());
+        token.node.destroy();
+        this.tokens[col][row] = null;
+
+        if (isRow) {
+            await this.destroyRowSequentially(row, col);
+        } else {
+            await this.destroyColumnSequentially(col, row);
+        }
+        await this.processBonusQueue();
+        await this.applyGravityAndRefillAsync();
+    }
+
+
+    private async destroyRowSequentially(row: number, centerCol: number) {
+        const delay = this.bonusLineDestroyDelay;
+        const destroyedStats: Record<number, number> = {};
+
+        let left = centerCol - 1;
+        let right = centerCol + 1;
+
+        while (left >= 0 || right < this.gridSize.x) {
+            // Уничтожаем слева
+            if (left >= 0) {
+                const token = this.tokens[left][row];
+                if (token) {
+                    if (token.isBonus()) {
+                        this.playExplosionAt(token.node.getPosition());
+                        this.pendingBonuses.push({ col: left, row: row, type: token.type });
+                        token.node.destroy();
+                        this.tokens[left][row] = null;
+                    } else {
+                        this.playExplosionAt(token.node.getPosition());
+                        destroyedStats[token.type] = (destroyedStats[token.type] || 0) + 1;
+                        token.node.destroy();
+                        this.tokens[left][row] = null;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+                }
+            }
+
+            // Уничтожаем справа
+            if (right < this.gridSize.x) {
+                const token = this.tokens[right][row];
+                if (token) {
+                    if (token.isBonus()) {
+                        this.playExplosionAt(token.node.getPosition());
+                        this.pendingBonuses.push({ col: right, row: row, type: token.type });
+                        token.node.destroy();
+                        this.tokens[right][row] = null;
+                    } else {
+                        this.playExplosionAt(token.node.getPosition());
+                        destroyedStats[token.type] = (destroyedStats[token.type] || 0) + 1;
+                        token.node.destroy();
+                        this.tokens[right][row] = null;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+                }
+            }
+
+            left--;
+            right++;
+        }
+
+        if (Object.keys(destroyedStats).length > 0) {
+            const event = new cc.Event.EventCustom("tokens-destroyed", true);
+            event.setUserData({ tokens: destroyedStats });
+            this.node.dispatchEvent(event);
+        }
+    }
+
+    private async destroyColumnSequentially(col: number, centerRow: number) {
+        const delay = this.bonusLineDestroyDelay;
+        const destroyedStats: Record<number, number> = {};
+
+        let up = centerRow - 1;
+        let down = centerRow + 1;
+
+        while (up >= 0 || down < this.gridSize.y) {
+            // Вверх
+            if (up >= 0) {
+                const token = this.tokens[col][up];
+                if (token) {
+                    if (token.isBonus()) {
+                        this.playExplosionAt(token.node.getPosition());
+                        this.pendingBonuses.push({ col: col, row: up, type: token.type });
+                        token.node.destroy();
+                        this.tokens[col][up] = null;
+                    } else {
+                        this.playExplosionAt(token.node.getPosition());
+                        destroyedStats[token.type] = (destroyedStats[token.type] || 0) + 1;
+                        token.node.destroy();
+                        this.tokens[col][up] = null;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+                }
+            }
+
+            // Вниз
+            if (down < this.gridSize.y) {
+                const token = this.tokens[col][down];
+                if (token) {
+                    if (token.isBonus()) {
+                        this.playExplosionAt(token.node.getPosition());
+                        this.pendingBonuses.push({ col: col, row: down, type: token.type });
+                        token.node.destroy();
+                        this.tokens[col][down] = null;
+                    } else {
+                        this.playExplosionAt(token.node.getPosition());
+                        destroyedStats[token.type] = (destroyedStats[token.type] || 0) + 1;
+                        token.node.destroy();
+                        this.tokens[col][down] = null;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+                }
+            }
+
+            up--;
+            down++;
+        }
+
+        if (Object.keys(destroyedStats).length > 0) {
+            const event = new cc.Event.EventCustom("tokens-destroyed", true);
+            event.setUserData({ tokens: destroyedStats });
+            this.node.dispatchEvent(event);
+        }
+    }
+
+
+    private destroyTokensAtPositions(positions: cc.Vec2[], playEffects: boolean = true): Record<number, number> {
+        const destroyedTokens: Record<number, number> = {};
+        for (const pos of positions) {
+            const token = this.tokens[pos.x][pos.y];
+            if (token && token.node && token.node.isValid) {
+                if (playEffects) {
+                    this.playExplosionAt(token.node.getPosition());
+                }
+                destroyedTokens[token.type] = (destroyedTokens[token.type] || 0) + 1;
+                token.node.destroy();
+                this.tokens[pos.x][pos.y] = null;
+            }
+        }
+        if (Object.keys(destroyedTokens).length > 0) {
+            const event = new cc.Event.EventCustom("tokens-destroyed", true);
+            event.setUserData({ tokens: destroyedTokens });
+            this.node.dispatchEvent(event);
+        }
+        return destroyedTokens;
+    }
+
+
+    private async processBonusQueue() {
+        if (this.isProcessingQueue) return;
+        this.isProcessingQueue = true;
+
+        while (this.pendingBonuses.length > 0) {
+            const bonus = this.pendingBonuses.shift();
+            if (!bonus) continue;
+            await this.activateBonusByType(bonus.col, bonus.row, bonus.type);
+        }
+
+        this.isProcessingQueue = false;
+    }
+
+    private async activateBonusByType(col: number, row: number, bonusType: TokenType) {
+        const isRow = bonusType === TokenType.BONUS_ROW;
+        if (isRow) {
+            await this.destroyRowSequentially(row, col);
+        } else {
+            await this.destroyColumnSequentially(col, row);
+        }
+    }
+    
 
 
     //-----------------------------------
@@ -432,29 +930,54 @@ export default class Grid extends cc.Component {
 
     onTouchStart(event: cc.Event.EventTouch) {
         this.eventStartPos = event.getLocation();
-        if (this.isAnimating) return;
+        if (this.isAnimating || this.gridLocked) return;
     }
 
 
-    onTouchEnd(event: cc.Event.EventTouch) {
-        if (this.isAnimating) return;
+   async onTouchEnd(event: cc.Event.EventTouch) {
+        if (this.isAnimating || this.gridLocked) return;
+
+        // Режим бустера
+        if (this.boosterSelectCallback) {
+            const tokenPos = this.posToGrid(event.getLocation());
+            if (tokenPos) {
+                this.boosterSelectCallback(tokenPos);
+            } else if (this.boosterCancelCallback) {
+                this.boosterCancelCallback();
+                this.clearBoosterMode();
+            }
+            return;
+        }
 
         const swipeDir = this.checkSwipe(this.eventStartPos, event.getLocation());
-        if (swipeDir.len() !== 0) return;
+        if (!swipeDir.equals(cc.Vec2.ZERO)) return;
 
         const tokenPos = this.posToGrid(event.getLocation());
         if (!tokenPos) return;
+        const token = this.tokens[tokenPos.x][tokenPos.y];
+        if (!token) return;
 
-        const success = this.explodeClusterAt(tokenPos.x, tokenPos.y);
-        if (!success) return;
+        if (token.isBonus()) {
+            this.isAnimating = true;
+            await this.activateBonusToken(tokenPos.x, tokenPos.y);
+            this.isAnimating = false;
+            return;
+        }
 
-        const moveEvent = new cc.Event.EventCustom("move-made", true);
-        this.node.dispatchEvent(moveEvent);
+        const destroyedCount = this.explodeClusterAt(tokenPos.x, tokenPos.y);
+        if (destroyedCount === null) return;
 
         this.isAnimating = true;
 
+        if (destroyedCount >= this.bonusSpawnThreshold) {
+            if (this.tokens[tokenPos.x][tokenPos.y] === null) {
+                this.spawnBonusToken(tokenPos.x, tokenPos.y);
+                this.recomputeAllClusters(); // обновить кластеры после появления бонуса
+            }
+        }
 
-        this.applyGravityAndRefillAsync();
+        await this.applyGravityAndRefillAsync();
+        this.isAnimating = false;
     }
 
 

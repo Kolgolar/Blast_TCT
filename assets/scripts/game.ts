@@ -1,9 +1,15 @@
 import Grid from './grid';
+import GameEnded from './game_ended';
+import BoostersContainer from './boosters_container';
 
 const {ccclass, property} = cc._decorator;
+export enum GameResult { SCORE_REACHED, NO_MOVES, NO_CLUSTERS }
 
-@ccclass
-export default class NewClass extends cc.Component {
+@ccclass("Game")
+export default class Game extends cc.Component {
+
+    @property(cc.Prefab)
+    resultsPanel: cc.Prefab = null;
 
     @property(cc.Label)
     scoreLabel: cc.Label = null;
@@ -20,39 +26,37 @@ export default class NewClass extends cc.Component {
     @property(cc.Node)
     grid: cc.Node = null;
 
-    score: number = 0;
-    movesLeft: number = 0;
-    // @property
-    // text: string = 'hello';
+    @property(cc.Node)
+    boostersContainer: cc.Node = null;
 
-    // LIFE-CYCLE CALLBACKS:
+    private gameEnded = false;
+    private resultsPanelInstance: cc.Node = null;
+    private score: number = 0;
+    private movesLeft: number = 0;
+    
 
     onLoad () {
         cc.systemEvent.on(cc.SystemEvent.EventType.KEY_DOWN, this.onKeyDown, this);
         this.grid.on("tokens-destroyed", this.onTokensDestroyed, this);
-        this.grid.on("move-made", this.onMoveMade, this);
-        this.grid.on("game-over", this.onGameOver, this);
+        // this.grid.on("move-made", this.onMoveMade, this);
+        this.grid.on("no-clusters", this.onNoClusters, this);
     }
 
-    protected onDestroy(): void {
-        cc.systemEvent.off(cc.SystemEvent.EventType.KEY_DOWN, this.onKeyDown, this);
-    }
+    // protected onDestroy(): void {
+    //     cc.systemEvent.off(cc.SystemEvent.EventType.KEY_DOWN, this.onKeyDown, this);
+    // }
 
     start () {
         this.restartGame();
     }
 
-    update (dt) {
-        // this.addScore(1);
-    }
-
-    onMoveMade(event: cc.Event.EventCustom) {
-        this.setMoves(this.movesLeft - 1);
-        
-        if (this.movesLeft <= 0) {
-            this.gameOver();
-        }
-    }
+    // onMoveMade(event: cc.Event.EventCustom) {
+    //     this.setMoves(this.movesLeft - 1);
+    //     if (this.score >= this.scoreTarget)
+    //         this.gameEnd(GameResult.SCORE_REACHED);
+    //     else if (this.movesLeft <= 0)
+    //         this.gameEnd(GameResult.NO_MOVES);
+    // }
 
 
     onTokensDestroyed(event: cc.Event.EventCustom) {
@@ -64,11 +68,17 @@ export default class NewClass extends cc.Component {
             pointsAdd += 10 * (count as number);
         }
         this.setScore(this.score + pointsAdd);
+
+        this.setMoves(this.movesLeft - 1);
+        if (this.score >= this.scoreTarget)
+            this.gameEnd(GameResult.SCORE_REACHED);
+        else if (this.movesLeft <= 0)
+            this.gameEnd(GameResult.NO_MOVES);
     }
     
 
-    onGameOver(event: cc.Event.EventCustom) {
-        this.gameOver();
+    onNoClusters(event: cc.Event.EventCustom) {
+        this.gameEnd(GameResult.NO_CLUSTERS);
     }
 
 
@@ -82,8 +92,23 @@ export default class NewClass extends cc.Component {
         this.movesLabel.string = `${this.movesLeft}`;
     }
 
-    public gameOver() {
-        console.log("Game Over!");
+    public gameEnd(result: GameResult) {
+        if (this.gameEnded) return;
+        this.gameEnded = true;
+        this.grid.getComponent(Grid).setLocked(true);
+        const endPanel = cc.instantiate(this.resultsPanel);
+        const endPanelScript = endPanel.getComponent(GameEnded);
+        endPanelScript.configure(result);
+        this.node.addChild(endPanel);
+        this.resultsPanelInstance = endPanel;
+
+        const restartButton = endPanelScript.restartButton;
+        restartButton.clickEvents = [];
+        const handler = new cc.Component.EventHandler();
+        handler.target = this.node;
+        handler.component = "Game";
+        handler.handler = "restartGame";
+        restartButton.clickEvents.push(handler);
     }
 
 
@@ -92,6 +117,17 @@ export default class NewClass extends cc.Component {
         this.setScore(0);
         let gridScript = this.grid.getComponent(Grid);
         gridScript.startNewGame();
+        this.freeResultsPanel();
+        this.gameEnded = false;
+        this.boostersContainer.getComponent(BoostersContainer).reset();
+        this.boostersContainer.getComponent(BoostersContainer).setupBoosters([{"type": "teleport", "count": 3}, {"type": "bomb", "count": 2}]);
+    }
+
+    freeResultsPanel() {
+        if (this.resultsPanelInstance) {
+            this.resultsPanelInstance.destroy();
+            this.resultsPanelInstance = null;
+        }
     }
 
     onKeyDown(event: cc.Event.EventKeyboard) {
