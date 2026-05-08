@@ -605,11 +605,11 @@
     "particlesLayer": {
       "__id__": 10
     },
-    "framePadding": 32,
+    "framePadding": 45,
     "cellPadding": 5,
     "newTokensDelay": 0.1,
-    "fallDurationPerCell": 0.08,
-    "newTokensStaggerDelay": 0.07,
+    "fallDurationPerCell": 0.05,
+    "newTokensStaggerDelay": 0.04,
     "landingBounceFactor": 0.05,
     "bounceDuration": 0.05,
     "maxShuffleAttempts": 3,
@@ -1452,8 +1452,8 @@
     "movesLabel": {
       "__id__": 17
     },
-    "maxMoves": 15,
-    "scoreTarget": 500,
+    "maxMoves": 20,
+    "scoreTarget": 1000,
     "grid": {
       "__id__": 7
     },
