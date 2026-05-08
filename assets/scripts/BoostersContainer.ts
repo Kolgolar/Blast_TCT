@@ -2,8 +2,9 @@ import Grid from "./Grid";
 import { BaseBooster } from "./boosters/Booster";
 import { TeleportBooster } from "./boosters/TeleportBooster";
 import { BombBooster } from "./boosters/BombBooster";
+import BoosterButton from "./BoosterButton";
 
-const {ccclass, property} = cc._decorator;
+const { ccclass, property } = cc._decorator;
 
 @ccclass
 export default class BoostersContainer extends cc.Component {
@@ -13,7 +14,6 @@ export default class BoostersContainer extends cc.Component {
 
     @property(cc.Prefab) boosterButtonPrefab: cc.Prefab = null;
     private boosters: BaseBooster[] = [];
-    private buttons: cc.Node[] = [];
 
     @property(cc.SpriteFrame)
     teleportIcon: cc.SpriteFrame = null;
@@ -24,27 +24,24 @@ export default class BoostersContainer extends cc.Component {
     @property(cc.Node)
     grid: cc.Node = null;
 
-    private boosterButtons: { node: cc.Node, button: cc.Button, booster: BaseBooster }[] = [];
+    private boosterUIs: { node: cc.Node, ui: BoosterButton, booster: BaseBooster }[] = [];
     private currentActiveBooster: BaseBooster | null = null;
 
 
     public reset() {
         if (this.currentActiveBooster)
             this.cancelCurrentBooster();
-        this.boosterButtons = [];
+        this.boosterUIs = [];
         this.currentActiveBooster = null;
         this.node.removeAllChildren();
-        this.setButtonsEnabled(true);
     }
 
 
     public setupBoosters(boostersData: { type: string, count: number }[]) {
-        // Очистить старые
-        this.buttons.forEach(btn => btn.destroy());
-        this.buttons = [];
+        this.node.removeAllChildren();
         this.boosters = [];
+        this.boosterUIs = [];
 
-        // Создать экземпляры бустеров
         for (let data of boostersData) {
             let booster: BaseBooster;
             let icon: cc.SpriteFrame = null;
@@ -62,42 +59,41 @@ export default class BoostersContainer extends cc.Component {
             this.boosters.push(booster);
         }
 
-        // Создать UI кнопки
         const count = this.boosters.length;
         const startX = - (count - 1) * (this.BUTTON_WIDTH + this.SPACING) / 2;
         for (let i = 0; i < count; i++) {
+            const booster = this.boosters[i];
             const btnNode = cc.instantiate(this.boosterButtonPrefab);
             btnNode.parent = this.node;
             btnNode.setPosition(startX + i * (this.BUTTON_WIDTH + this.SPACING), 0);
-            const booster = this.boosters[i];
-            const iconSprite = btnNode.getChildByName('Icon').getComponent(cc.Sprite);
-            iconSprite.spriteFrame = booster.icon;
-            const countLabel = btnNode.getChildByName('Slot').getChildByName('Quantity').getComponent(cc.Label);
-            countLabel.string = booster.getCount().toString();
+
+            const ui = btnNode.getComponent(BoosterButton);
+            ui.setIcon(booster.icon);
+            ui.setCount(booster.getCount());
 
             const button = btnNode.getComponent(cc.Button);
             button.node.on(cc.Node.EventType.TOUCH_END, () => {
-                this.onBoosterClick(booster, button.node);
+                this.onBoosterClick(booster, ui);
             });
-            this.buttons.push(btnNode);
-            this.boosterButtons.push({
+
+            this.boosterUIs.push({
                 node: btnNode,
-                button: button,
+                ui: ui,
                 booster: booster
             });
         }
     }
 
+
     private setButtonEnabled(booster: BaseBooster, enabled: boolean) {
-        const entry = this.boosterButtons.find(b => b.booster === booster);
-        if (entry && entry.button) {
-            entry.button.interactable = enabled;
+        const entry = this.boosterUIs.find(b => b.booster === booster);
+        if (entry && entry.ui) {
+            entry.ui.setInteractable(enabled);
         }
     }
 
 
-    private onBoosterClick(booster: BaseBooster, btnNode: cc.Node) {
-        // Если нажали на уже активный бустер – отменяем его
+    private onBoosterClick(booster: BaseBooster, ui: BoosterButton) {
         if (this.currentActiveBooster === booster) {
             this.cancelCurrentBooster();
             return;
@@ -114,15 +110,15 @@ export default class BoostersContainer extends cc.Component {
         booster.activate(
             this.grid.getComponent(Grid),
             () => {
-                // Полное завершение после анимаций. Разблокируем кнопку и сбрасываем активный
                 this.setButtonEnabled(booster, true);
                 this.currentActiveBooster = null;
             },
             () => {
-                this.updateBoosterDisplay(booster, btnNode);
+                this.updateBoosterDisplay(booster, ui);
             }
         );
     }
+
 
     private cancelCurrentBooster() {
         if (!this.currentActiveBooster) return;
@@ -131,12 +127,9 @@ export default class BoostersContainer extends cc.Component {
         this.currentActiveBooster = null;
     }
 
-    private updateBoosterDisplay(booster: BaseBooster, btnNode: cc.Node) {
-        const labelNode = btnNode.getChildByName('Slot').getChildByName('Quantity');
-        if (labelNode) {
-            const label = labelNode.getComponent(cc.Label);
-            if (label) label.string = booster.getCount().toString();
-        }
+
+    private updateBoosterDisplay(booster: BaseBooster, ui: BoosterButton) {
+        ui.setCount(booster.getCount());
         if (booster.getCount() === 0) {
             this.setButtonEnabled(booster, false);
             if (this.currentActiveBooster === booster) {
@@ -147,9 +140,5 @@ export default class BoostersContainer extends cc.Component {
                 this.setButtonEnabled(booster, true);
             }
         }
-    }
-
-    private setButtonsEnabled(enabled: boolean) {
-        this.buttons.forEach(btn => btn.getComponent(cc.Button).interactable = enabled);
     }
 }

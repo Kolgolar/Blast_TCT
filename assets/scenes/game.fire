@@ -1452,7 +1452,7 @@
     "movesLabel": {
       "__id__": 17
     },
-    "maxMoves": 30,
+    "maxMoves": 15,
     "scoreTarget": 500,
     "grid": {
       "__id__": 7

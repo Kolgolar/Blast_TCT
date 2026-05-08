@@ -13,7 +13,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "Booster",
+    "_name": "BoosterButton",
     "_objFlags": 0,
     "_parent": null,
     "_children": [
@@ -31,10 +31,13 @@
       },
       {
         "__id__": 12
+      },
+      {
+        "__id__": 13
       }
     ],
     "_prefab": {
-      "__id__": 13
+      "__id__": 14
     },
     "_opacity": 255,
     "_color": {
@@ -260,7 +263,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "Quantity",
+    "_name": "Count",
     "_objFlags": 0,
     "_parent": {
       "__id__": 5
@@ -512,6 +515,22 @@
     "_N$disabledSprite": null,
     "_N$target": {
       "__id__": 1
+    },
+    "_id": ""
+  },
+  {
+    "__type__": "55a0cPzaa5KDZKy8DJQ97zp",
+    "_name": "",
+    "_objFlags": 0,
+    "node": {
+      "__id__": 1
+    },
+    "_enabled": true,
+    "iconSprite": {
+      "__id__": 3
+    },
+    "countLabel": {
+      "__id__": 7
     },
     "_id": ""
   },

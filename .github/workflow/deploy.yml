@@ -1,0 +1,32 @@
+name: Build and Deploy Cocos Creator 2.x
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Download Cocos Creator 2.x (Linux)
+        run: |
+          wget https://download.cocos.com/CocosCreator/v2.4.10/CocosCreator_2.4.10_linux.tar.gz
+          tar -xzf CocosCreator_2.4.10_linux.tar.gz
+          chmod +x ./CocosCreator/CocosCreator
+
+      - name: Build project (Web Mobile)
+        run: |
+          ./CocosCreator/CocosCreator \
+            --path . \
+            --build "platform=web-mobile;debug=false;md5Cache=true"
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./build/web-mobile
