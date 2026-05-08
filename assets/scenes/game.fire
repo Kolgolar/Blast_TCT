@@ -149,7 +149,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "Main Camera",
+    "_name": "MainCamera",
     "_objFlags": 0,
     "_parent": {
       "__id__": 2
@@ -341,7 +341,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "Grid Frame",
+    "_name": "GridFrame",
     "_objFlags": 0,
     "_parent": {
       "__id__": 2
@@ -591,11 +591,8 @@
       "__id__": 7
     },
     "_enabled": true,
-    "gridSize": {
-      "__type__": "cc.Vec2",
-      "x": 8,
-      "y": 8
-    },
+    "gridSizeX": 8,
+    "gridSizeY": 8,
     "token": {
       "__uuid__": "1d7bb786-dfdd-4ec5-b017-8c140034110f"
     },
@@ -619,12 +616,12 @@
     "shuffleAnimDuration": 1,
     "bonusSpawnThreshold": 4,
     "bonusLineDestroyDelay": 0.05,
-    "tokensSwapTime": 0.25,
+    "tokensSwapTime": 0.4,
     "_id": "81xoyVLsBKLpn3p06H3irW"
   },
   {
     "__type__": "cc.Node",
-    "_name": "Moves Frame",
+    "_name": "MovesFrame",
     "_objFlags": 0,
     "_parent": {
       "__id__": 2
@@ -690,7 +687,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "Score Frame",
+    "_name": "ScoreFrame",
     "_objFlags": 0,
     "_parent": {
       "__id__": 13
@@ -762,7 +759,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "Moves Background",
+    "_name": "MovesBackground",
     "_objFlags": 0,
     "_parent": {
       "__id__": 14
@@ -1215,7 +1212,7 @@
   },
   {
     "__type__": "cc.Node",
-    "_name": "Boosters Label",
+    "_name": "BoostersLabel",
     "_objFlags": 0,
     "_parent": {
       "__id__": 2
@@ -1455,7 +1452,7 @@
     "movesLabel": {
       "__id__": 17
     },
-    "maxMoves": 50,
+    "maxMoves": 30,
     "scoreTarget": 500,
     "grid": {
       "__id__": 7
@@ -1463,6 +1460,8 @@
     "boostersContainer": {
       "__id__": 27
     },
-    "_id": "81hJIOZv1N57iBWKjBfre1"
+    "boosterBombStartCount": 3,
+    "boosterSwapStartCount": 5,
+    "_id": "f1WXBJqWJBb4EPcCb8/6e5"
   }
 ]

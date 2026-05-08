@@ -1,4 +1,4 @@
-import Grid from "../grid";
+import Grid from "../Grid";
 
 const {ccclass, property} = cc._decorator;
 

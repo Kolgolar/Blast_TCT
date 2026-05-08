@@ -1,10 +1,13 @@
 const { ccclass, property } = cc._decorator;
-import Token, { TokenType, DEFAULT_TOKENS } from './token';
+import Token, { TokenType, DEFAULT_TOKENS } from './Token';
 
 @ccclass
 export default class Grid extends cc.Component {
-    @property({ type: cc.Vec2 })
-    gridSize = cc.v2(5, 5);
+    @property({ type: cc.Integer })
+    gridSizeX = 5;
+
+    @property({ type: cc.Integer })
+    gridSizeY = 5;
 
     @property({ type: cc.Prefab })
     token: cc.Prefab = null;
@@ -98,12 +101,21 @@ export default class Grid extends cc.Component {
         this.node.on(cc.Node.EventType.TOUCH_END, this.onTouchEnd, this);
     }
 
+    
     protected start(): void {
         this.startNewGame();
     }
 
 
+    private notifyGameStable() {
+    if (!this.isAnimating && !this.isShuffling && !this.isProcessingQueue && !this.gridLocked) {
+        const event = new cc.Event.EventCustom("game-stable", true);
+        this.node.dispatchEvent(event);
+    }
+}
 
+
+    
 
     //---------------------------
     // Публичные методы (управление игрой)
@@ -121,7 +133,7 @@ export default class Grid extends cc.Component {
         this.clearAllTokens();
         this.generateGrid();
         this.recomputeAllClusters();
-        this.checkAnyCluster(false);
+        this.checkAnyCluster(true);
     }
 
     public setLocked(lock: boolean) {
@@ -130,15 +142,15 @@ export default class Grid extends cc.Component {
 
 
 
-    
+
     //---------------------------
     // Бонусы
     //---------------------------
 
 
     private hasAnyBonusOnField(): boolean {
-        for (let col = 0; col < this.gridSize.x; col++) {
-            for (let row = 0; row < this.gridSize.y; row++) {
+        for (let col = 0; col < this.gridSizeX; col++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 const token = this.tokens[col][row];
                 if (token && token.isBonus()) {
                     return true;
@@ -187,6 +199,7 @@ export default class Grid extends cc.Component {
         }
         await this.processBonusQueue();
         await this.applyGravityAndRefillAsync();
+        this.notifyGameStable();
     }
 
     private async destroyRowSequentially(row: number, centerCol: number) {
@@ -196,7 +209,7 @@ export default class Grid extends cc.Component {
         let left = centerCol - 1;
         let right = centerCol + 1;
 
-        while (left >= 0 || right < this.gridSize.x) {
+        while (left >= 0 || right < this.gridSizeX) {
             if (left >= 0) {
                 const token = this.tokens[left][row];
                 if (token) {
@@ -215,7 +228,7 @@ export default class Grid extends cc.Component {
                 }
             }
 
-            if (right < this.gridSize.x) {
+            if (right < this.gridSizeX) {
                 const token = this.tokens[right][row];
                 if (token) {
                     if (token.isBonus()) {
@@ -238,12 +251,11 @@ export default class Grid extends cc.Component {
         }
 
         if (Object.keys(destroyedStats).length > 0) {
-            const event = new cc.Event.EventCustom("tokens-destroyed", true);
-            event.setUserData({ tokens: destroyedStats });
-            this.node.dispatchEvent(event);
+            this.dispatchTokensDestroyed(destroyedStats);
         }
     }
 
+    
     private async destroyColumnSequentially(col: number, centerRow: number) {
         const delay = this.bonusLineDestroyDelay;
         const destroyedStats: Record<number, number> = {};
@@ -251,7 +263,7 @@ export default class Grid extends cc.Component {
         let up = centerRow - 1;
         let down = centerRow + 1;
 
-        while (up >= 0 || down < this.gridSize.y) {
+        while (up >= 0 || down < this.gridSizeY) {
             if (up >= 0) {
                 const token = this.tokens[col][up];
                 if (token) {
@@ -270,7 +282,7 @@ export default class Grid extends cc.Component {
                 }
             }
 
-            if (down < this.gridSize.y) {
+            if (down < this.gridSizeY) {
                 const token = this.tokens[col][down];
                 if (token) {
                     if (token.isBonus()) {
@@ -293,9 +305,7 @@ export default class Grid extends cc.Component {
         }
 
         if (Object.keys(destroyedStats).length > 0) {
-            const event = new cc.Event.EventCustom("tokens-destroyed", true);
-            event.setUserData({ tokens: destroyedStats });
-            this.node.dispatchEvent(event);
+            this.dispatchTokensDestroyed(destroyedStats);
         }
     }
 
@@ -403,10 +413,10 @@ export default class Grid extends cc.Component {
         const pos2World = token2.node.getPosition();
 
         cc.tween(token1.node)
-            .to(this.tokensSwapTime, { position: pos2World })
+            .to(this.tokensSwapTime, { position: pos2World }, { easing: 'expoOut' })
             .start();
         cc.tween(token2.node)
-            .to(this.tokensSwapTime, { position: pos1World })
+            .to(this.tokensSwapTime, { position: pos1World }, { easing: 'expoOut' })
             .call(() => {
                 this.tokens[pos1.x][pos1.y] = token2;
                 this.tokens[pos2.x][pos2.y] = token1;
@@ -433,7 +443,7 @@ export default class Grid extends cc.Component {
             for (let dy = -radius; dy <= radius; dy++) {
                 const col = centerCol + dx;
                 const row = centerRow + dy;
-                if (col >= 0 && col < this.gridSize.x && row >= 0 && row < this.gridSize.y) {
+                if (col >= 0 && col < this.gridSizeX && row >= 0 && row < this.gridSizeY) {
                     const token = this.tokens[col][row];
                     if (token) {
                         if (token.isBonus()) {
@@ -457,6 +467,7 @@ export default class Grid extends cc.Component {
         await this.applyGravityAndRefillAsync();
         this.isAnimating = false;
         if (onComplete) onComplete();
+        this.notifyGameStable();
     }
 
     public async shuffleBoardAnimated(onComplete?: () => void) {
@@ -468,8 +479,8 @@ export default class Grid extends cc.Component {
         this.isAnimating = true;
 
         const allTokens: Token[] = [];
-        for (let col = 0; col < this.gridSize.x; col++) {
-            for (let row = 0; row < this.gridSize.y; row++) {
+        for (let col = 0; col < this.gridSizeX; col++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 const token = this.tokens[col][row];
                 if (token) allTokens.push(token);
             }
@@ -482,8 +493,8 @@ export default class Grid extends cc.Component {
         }
 
         const allPositions: cc.Vec2[] = [];
-        for (let col = 0; col < this.gridSize.x; col++) {
-            for (let row = 0; row < this.gridSize.y; row++) {
+        for (let col = 0; col < this.gridSizeX; col++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 allPositions.push(cc.v2(col, row));
             }
         }
@@ -507,8 +518,8 @@ export default class Grid extends cc.Component {
         }
         await Promise.all(animations);
 
-        for (let col = 0; col < this.gridSize.x; col++) {
-            for (let row = 0; row < this.gridSize.y; row++) {
+        for (let col = 0; col < this.gridSizeX; col++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 this.tokens[col][row] = null;
             }
         }
@@ -523,6 +534,7 @@ export default class Grid extends cc.Component {
         this.isShuffling = false;
         this.isAnimating = false;
         if (onComplete) onComplete();
+        this.notifyGameStable();
     }
 
 
@@ -535,9 +547,9 @@ export default class Grid extends cc.Component {
 
     private clearAllTokens(): void {
         if (!this.tokens) return;
-        for (let col = 0; col < this.gridSize.x; col++) {
+        for (let col = 0; col < this.gridSizeX; col++) {
             if (!this.tokens[col]) continue;
-            for (let row = 0; row < this.gridSize.y; row++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 const token = this.tokens[col][row];
                 if (token && token.node && token.node.isValid) {
                     token.node.destroy();
@@ -557,17 +569,17 @@ export default class Grid extends cc.Component {
             this.node.height - this.framePadding * 2
         );
         this.cellSize = cc.v2(
-            availableField.x / this.gridSize.x,
-            availableField.y / this.gridSize.y
+            availableField.x / this.gridSizeX,
+            availableField.y / this.gridSizeY
         );
         this.tokenSize = cc.v2(
             this.cellSize.x - this.cellPadding * 2,
             this.cellSize.y - this.cellPadding * 2
         );
 
-        for (let col = 0; col < this.gridSize.x; col++) {
+        for (let col = 0; col < this.gridSizeX; col++) {
             this.tokens[col] = [];
-            for (let row = 0; row < this.gridSize.y; row++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 const newToken = cc.instantiate(this.token);
                 const tokenComponent = newToken.getComponent(Token);
                 const randomIndex = this.getRandomTokenType();
@@ -606,22 +618,22 @@ export default class Grid extends cc.Component {
         const animations: Promise<void>[] = [];
         const bounceOffsetY = -this.cellSize.y * this.landingBounceFactor;
 
-        for (let col = 0; col < this.gridSize.x; col++) {
+        for (let col = 0; col < this.gridSizeX; col++) {
             const items: { token: Token; originalRow: number }[] = [];
-            for (let row = 0; row < this.gridSize.y; row++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 const token = this.tokens[col][row];
                 if (token && !token.isBonus()) {
                     items.push({ token, originalRow: row });
                 }
             }
 
-            const bonusRows: boolean[] = Array(this.gridSize.y).fill(false);
-            for (let row = 0; row < this.gridSize.y; row++) {
+            const bonusRows: boolean[] = Array(this.gridSizeY).fill(false);
+            for (let row = 0; row < this.gridSizeY; row++) {
                 const token = this.tokens[col][row];
                 if (token && token.isBonus()) bonusRows[row] = true;
             }
 
-            for (let row = 0; row < this.gridSize.y; row++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 const token = this.tokens[col][row];
                 if (token && !token.isBonus()) {
                     this.tokens[col][row] = null;
@@ -630,8 +642,8 @@ export default class Grid extends cc.Component {
 
             let newRow = 0;
             for (let idx = 0; idx < items.length; idx++) {
-                while (newRow < this.gridSize.y && bonusRows[newRow]) newRow++;
-                if (newRow >= this.gridSize.y) break;
+                while (newRow < this.gridSizeY && bonusRows[newRow]) newRow++;
+                if (newRow >= this.gridSizeY) break;
 
                 const { token, originalRow } = items[idx];
                 const newPos = this.getTokenPosition(col, newRow);
@@ -664,13 +676,13 @@ export default class Grid extends cc.Component {
             }
 
             const emptyRows: number[] = [];
-            for (let row = 0; row < this.gridSize.y; row++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 if (this.tokens[col][row] === null && !bonusRows[row]) {
                     emptyRows.push(row);
                 }
             }
 
-            const topRowPos = this.getTokenPosition(col, this.gridSize.y - 1);
+            const topRowPos = this.getTokenPosition(col, this.gridSizeY - 1);
             const newTokens: Token[] = [];
             for (let idx = 0; idx < emptyRows.length; idx++) {
                 const targetRow = emptyRows[idx];
@@ -719,6 +731,7 @@ export default class Grid extends cc.Component {
         this.isAnimating = false;
         this.recomputeAllClusters();
         this.checkAnyCluster();
+        this.notifyGameStable();
     }
 
 
@@ -731,13 +744,13 @@ export default class Grid extends cc.Component {
 
     recomputeAllClusters() {
         this.clusters = [];
-        this.clusterId = Array(this.gridSize.x).fill(null).map(() => Array(this.gridSize.y).fill(-1));
+        this.clusterId = Array(this.gridSizeX).fill(null).map(() => Array(this.gridSizeY).fill(-1));
 
         let nextClusterIndex = 0;
-        const visited: boolean[][] = Array(this.gridSize.x).fill(null).map(() => Array(this.gridSize.y).fill(false));
+        const visited: boolean[][] = Array(this.gridSizeX).fill(null).map(() => Array(this.gridSizeY).fill(false));
 
-        for (let col = 0; col < this.gridSize.x; col++) {
-            for (let row = 0; row < this.gridSize.y; row++) {
+        for (let col = 0; col < this.gridSizeX; col++) {
+            for (let row = 0; row < this.gridSizeY; row++) {
                 const token = this.tokens[col][row];
                 if (!token || visited[col][row]) continue;
 
@@ -758,7 +771,7 @@ export default class Grid extends cc.Component {
                     ];
                     for (const nb of neighbors) {
                         const nx = nb.x, ny = nb.y;
-                        if (nx >= 0 && nx < this.gridSize.x && ny >= 0 && ny < this.gridSize.y) {
+                        if (nx >= 0 && nx < this.gridSizeX && ny >= 0 && ny < this.gridSizeY) {
                             const nbToken = this.tokens[nx][ny];
                             if (nbToken && !visited[nx][ny] && nbToken.type === type && !nbToken.isBonus()) {
                                 queue.push(nb);
@@ -803,9 +816,7 @@ export default class Grid extends cc.Component {
             }
         }
         if (Object.keys(destroyedTokens).length > 0) {
-            const event = new cc.Event.EventCustom("tokens-destroyed", true);
-            event.setUserData({ tokens: destroyedTokens });
-            this.node.dispatchEvent(event);
+            this.dispatchTokensDestroyed(destroyedTokens);
         }
         return destroyedTokens;
     }
@@ -836,6 +847,7 @@ export default class Grid extends cc.Component {
                 if (this.shuffleAttempts < this.maxShuffleAttempts) {
                     this.handleNoClusters();
                 } else {
+                    this.dispatchTokensDestroyed();
                     const event = new cc.Event.EventCustom("no-clusters", true);
                     this.node.dispatchEvent(event);
                 }
@@ -862,6 +874,13 @@ export default class Grid extends cc.Component {
                 this.handleNoClusters();
             }
         });
+    }
+
+
+    private dispatchTokensDestroyed(destroyedTokens: Record<number, number>) {
+        const event = new cc.Event.EventCustom("tokens-destroyed", true);
+        event.setUserData({ tokens: destroyedTokens });
+        this.node.dispatchEvent(event);
     }
 
 
@@ -944,7 +963,7 @@ export default class Grid extends cc.Component {
         let col = Math.floor((localPos.x - startX) / this.cellSize.x);
         let row = Math.floor((localPos.y - startY) / this.cellSize.y);
 
-        if (col < 0 || col >= this.gridSize.x || row < 0 || row >= this.gridSize.y) {
+        if (col < 0 || col >= this.gridSizeX || row < 0 || row >= this.gridSizeY) {
             return null;
         }
         return cc.v2(col, row);

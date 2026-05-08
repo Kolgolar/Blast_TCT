@@ -1,4 +1,3 @@
-// import { _decorator, Component, Sprite, SpriteFrame } from 'cc';
 const {ccclass, property} = cc._decorator;
 
 export enum TokenType { NONE = -1, PURPLE, GREEN, RED, YELLOW, BLUE, BONUS_ROW, BONUS_COLUMN }
@@ -11,13 +10,13 @@ export default class Token extends cc.Component {
 
     private static readonly texturePaths: Record<TokenType, string> = {
         [TokenType.NONE]: '',
-        [TokenType.PURPLE]: 'textures/tokens/token_purple',
-        [TokenType.GREEN]: 'textures/tokens/token_green',
-        [TokenType.RED]: 'textures/tokens/token_red',
-        [TokenType.YELLOW]: 'textures/tokens/token_yellow',
-        [TokenType.BLUE]: 'textures/tokens/token_blue',
-        [TokenType.BONUS_ROW]: 'textures/bonuses/bonus_rockets_horisontal',
-        [TokenType.BONUS_COLUMN]: 'textures/bonuses/bonus_rockets_horisontal',
+        [TokenType.PURPLE]: 'textures/tokens/token-purple',
+        [TokenType.GREEN]: 'textures/tokens/token-green',
+        [TokenType.RED]: 'textures/tokens/token-red',
+        [TokenType.YELLOW]: 'textures/tokens/token-yellow',
+        [TokenType.BLUE]: 'textures/tokens/token-blue',
+        [TokenType.BONUS_ROW]: 'textures/bonuses/bonus-rockets-horisontal',
+        [TokenType.BONUS_COLUMN]: 'textures/bonuses/bonus-rockets-horisontal',
     };
 
     onLoad() {

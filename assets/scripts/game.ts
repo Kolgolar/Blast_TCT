@@ -1,6 +1,6 @@
-import Grid from './grid';
-import GameEnded from './game_ended';
-import BoostersContainer from './boosters_container';
+import Grid from './Grid';
+import GameEnded from './GameEnded';
+import BoostersContainer from './BoostersContainer';
 
 const {ccclass, property} = cc._decorator;
 export enum GameResult { SCORE_REACHED, NO_MOVES, NO_CLUSTERS }
@@ -29,6 +29,12 @@ export default class Game extends cc.Component {
     @property(cc.Node)
     boostersContainer: cc.Node = null;
 
+    @property(cc.Integer)
+    boosterBombStartCount = 3;
+
+    @property(cc.Integer)
+    boosterSwapStartCount = 5;
+
     private gameEnded = false;
     private resultsPanelInstance: cc.Node = null;
     private score: number = 0;
@@ -38,8 +44,8 @@ export default class Game extends cc.Component {
     onLoad () {
         cc.systemEvent.on(cc.SystemEvent.EventType.KEY_DOWN, this.onKeyDown, this);
         this.grid.on("tokens-destroyed", this.onTokensDestroyed, this);
-        // this.grid.on("move-made", this.onMoveMade, this);
         this.grid.on("no-clusters", this.onNoClusters, this);
+        this.grid.on("game-stable", this.onGameStable, this);
     }
 
     start () {
@@ -52,21 +58,23 @@ export default class Game extends cc.Component {
         const tokens = data.tokens;
         let pointsAdd = 0;
         for (const [type, count] of Object.entries(tokens)) {
-            console.log(count);
             pointsAdd += 10 * (count as number);
         }
         this.setScore(this.score + pointsAdd);
 
         this.setMoves(this.movesLeft - 1);
-        if (this.score >= this.scoreTarget)
-            this.gameEnd(GameResult.SCORE_REACHED);
-        else if (this.movesLeft <= 0)
-            this.gameEnd(GameResult.NO_MOVES);
     }
     
 
     onNoClusters(event: cc.Event.EventCustom) {
         this.gameEnd(GameResult.NO_CLUSTERS);
+    }
+
+    onGameStable() {
+        if (this.score >= this.scoreTarget)
+            this.gameEnd(GameResult.SCORE_REACHED);
+        else if (this.movesLeft <= 0)
+            this.gameEnd(GameResult.NO_MOVES);
     }
 
 
@@ -108,7 +116,10 @@ export default class Game extends cc.Component {
         this.freeResultsPanel();
         this.gameEnded = false;
         this.boostersContainer.getComponent(BoostersContainer).reset();
-        this.boostersContainer.getComponent(BoostersContainer).setupBoosters([{"type": "teleport", "count": 3}, {"type": "bomb", "count": 2}]);
+        this.boostersContainer.getComponent(BoostersContainer).setupBoosters([
+            {"type": "teleport", "count": this.boosterSwapStartCount},
+            {"type": "bomb", "count": this.boosterBombStartCount}
+        ]);
     }
 
     freeResultsPanel() {

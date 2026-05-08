@@ -1,7 +1,7 @@
-import Grid from "./grid";
-import { BaseBooster } from "./boosters/booster";
-import { TeleportBooster } from "./boosters/teleport_booster";
-import { BombBooster } from "./boosters/bomb_booster";
+import Grid from "./Grid";
+import { BaseBooster } from "./boosters/Booster";
+import { TeleportBooster } from "./boosters/TeleportBooster";
+import { BombBooster } from "./boosters/BombBooster";
 
 const {ccclass, property} = cc._decorator;
 
@@ -147,7 +147,6 @@ export default class BoostersContainer extends cc.Component {
                 this.setButtonEnabled(booster, true);
             }
         }
-        console.log("Updating display for booster, count:", booster.getCount());
     }
 
     private setButtonsEnabled(enabled: boolean) {

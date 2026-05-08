@@ -1,6 +1,6 @@
 const {ccclass, property} = cc._decorator;
 
-import { GameResult } from "./game";
+import { GameResult } from "./Game";
 
 @ccclass
 export default class NewClass extends cc.Component {

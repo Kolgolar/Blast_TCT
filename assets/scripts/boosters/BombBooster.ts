@@ -1,5 +1,5 @@
-import Grid from "../grid";
-import { BaseBooster } from "./booster";
+import Grid from "../Grid";
+import { BaseBooster } from "./Booster";
 
 const {ccclass, property} = cc._decorator;
 
